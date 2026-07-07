@@ -1,0 +1,41 @@
+# ============================================================
+# NaijaPress Collector — automatic schedule
+# This file must live at:  .github/workflows/collect.yml
+# GitHub runs it for you — no server needed.
+# ============================================================
+
+name: Collect Nigerian news
+
+on:
+  schedule:
+    # Runs every 2 hours. GitHub uses UTC time; Nigeria is UTC+1,
+    # so these runs land at 01:20, 03:20, 05:20 ... WAT around the clock.
+    # Frequent runs matter because RSS feeds only show the latest ~10-25
+    # articles — checking often means nothing slips through.
+    - cron: "20 */2 * * *"
+  # Also lets you trigger a run manually from the Actions tab (for testing)
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the tools the script needs
+        run: pip install -r requirements.txt
+
+      - name: Run the collector
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CONTACT_EMAIL: ${{ secrets.CONTACT_EMAIL }}
+        run: python collector.py
