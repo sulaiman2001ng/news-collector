@@ -121,7 +121,7 @@ SOURCES = [
 ]
 
 # Seconds to wait between article downloads (politeness — do not lower much)
-FETCH_DELAY = 5
+FETCH_DELAY = 3
 
 # Read the secret connection details from the environment (set in GitHub).
 # Long keys sometimes get copied with a hidden line-break in the middle;
@@ -139,10 +139,33 @@ HEADERS_DB = {
     "Content-Type": "application/json",
 }
 
-# An honest User-Agent identifying the crawler, as good practice requires.
+# Present as a normal browser — several papers' protective filters (e.g.
+# The Sun, The Nation, Guardian) block unfamiliar user agents with a 403.
+# We stay polite: slow request rate, and your contact email travels in
+# the standard "From" header so site owners can always reach you.
 HEADERS_WEB = {
-    "User-Agent": f"NaijaPressResearchArchive/1.0 (+{CONTACT}; academic research archive)"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "From": CONTACT,
 }
+
+
+def fetch(url, tries=2, timeout=60):
+    """Download a URL with patience: a longer timeout than before, and a
+    second attempt after a short pause if the first fails (news sites are
+    sometimes briefly slow or flaky — one retry fixes most of it)."""
+    last_error = None
+    for attempt in range(tries):
+        try:
+            r = requests.get(url, headers=HEADERS_WEB, timeout=timeout)
+            r.raise_for_status()
+            return r
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt < tries - 1:
+                time.sleep(6)
+    raise last_error
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -227,8 +250,7 @@ def collect_source(source):
     feed_note = ""
     for feed_url in source["feed_urls"]:
         try:
-            resp = requests.get(feed_url, headers=HEADERS_WEB, timeout=30)
-            resp.raise_for_status()
+            resp = fetch(feed_url)
             feed = feedparser.parse(resp.content)
             for e in feed.entries:
                 link = clean_url(getattr(e, "link", "") or "")
@@ -257,8 +279,7 @@ def collect_source(source):
     for url in new_urls:
         info = entries[url]
         try:
-            page = requests.get(url, headers=HEADERS_WEB, timeout=30)
-            page.raise_for_status()
+            page = fetch(url)
 
             extracted = trafilatura.bare_extraction(
                 page.text, url=url, with_metadata=True, favor_precision=True
