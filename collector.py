@@ -39,24 +39,96 @@ SOURCES = [
         ],
     },
     {
-        "id": "premiumtimes",
-        "name": "Premium Times",
+        "id": "vanguard",
+        "name": "Vanguard",
         "feed_urls": [
-            "https://www.premiumtimesng.com/feed",
-            "https://www.premiumtimesng.com/feed?paged=2",
+            "https://www.vanguardngr.com/feed/",
+            "https://www.vanguardngr.com/feed/?paged=2",
+        ],
+    },
+    {
+        "id": "dailytrust",
+        "name": "Daily Trust",
+        "feed_urls": [
+            "https://dailytrust.com/feed/",
+            "https://dailytrust.com/feed/?paged=2",
+        ],
+    },
+    {
+        "id": "guardian",
+        "name": "The Guardian Nigeria",
+        "feed_urls": [
+            "https://guardian.ng/feed/",
+            "https://guardian.ng/feed/?paged=2",
+        ],
+    },
+    {
+        "id": "businessday",
+        "name": "BusinessDay",
+        "feed_urls": [
+            "https://businessday.ng/feed/",
+            "https://businessday.ng/feed/?paged=2",
+        ],
+    },
+    {
+        "id": "pmnews",
+        "name": "PM News",
+        "feed_urls": [
+            "https://pmnewsnigeria.com/feed/",
+            "https://pmnewsnigeria.com/feed/?paged=2",
+        ],
+    },
+    {
+        "id": "leadership",
+        "name": "Leadership",
+        "feed_urls": [
+            "https://leadership.ng/feed/",
+            "https://leadership.ng/feed/?paged=2",
+        ],
+    },
+    {
+        "id": "thisday",
+        "name": "ThisDay",
+        "feed_urls": [
+            "https://www.thisdaylive.com/feed/",
+            "https://www.thisdaylive.com/index.php/feed/",  # alternate address some ThisDay setups use
+        ],
+    },
+    {
+        "id": "thenation",
+        "name": "The Nation",
+        "feed_urls": [
+            "https://thenationonlineng.net/feed/",
+            "https://thenationonlineng.net/feed/?paged=2",
+        ],
+    },
+    {
+        "id": "tribune",
+        "name": "Nigerian Tribune",
+        "feed_urls": [
+            "https://tribuneonlineng.com/feed/",
+            "https://tribuneonlineng.com/feed/?paged=2",
+        ],
+    },
+    {
+        "id": "sun",
+        "name": "The Sun",
+        "feed_urls": [
+            "https://sunnewsonline.com/feed/",
+            "https://sunnewsonline.com/feed/?paged=2",
         ],
     },
 ]
 
 # Seconds to wait between article downloads (politeness — do not lower much)
-FETCH_DELAY = 4
+FETCH_DELAY = 5
 
 # Read the secret connection details from the environment (set in GitHub).
-# .strip() removes any accidental spaces or line-breaks picked up when
-# the secrets were copy-pasted — a very common, invisible setup snag.
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-CONTACT = os.environ.get("CONTACT_EMAIL", "research-archive").strip()
+# Long keys sometimes get copied with a hidden line-break in the middle;
+# keys and URLs never contain whitespace, so we remove ALL of it anywhere.
+SUPABASE_URL = re.sub(r"\s+", "", os.environ.get("SUPABASE_URL", "")).rstrip("/")
+SUPABASE_KEY = re.sub(r"\s+", "", os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+CONTACT = re.sub(r"\s+", "", os.environ.get("CONTACT_EMAIL", "research-archive"))
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     sys.exit("ERROR: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set.")
