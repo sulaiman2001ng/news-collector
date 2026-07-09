@@ -152,20 +152,44 @@ HEADERS_WEB = {
 
 
 def fetch(url, tries=2, timeout=60):
-    """Download a URL with patience: a longer timeout than before, and a
-    second attempt after a short pause if the first fails (news sites are
-    sometimes briefly slow or flaky — one retry fixes most of it)."""
+    """Download a URL with patience: a longer timeout, one retry after a
+    short pause, and — if the site answers 403 Forbidden — an automatic
+    switch to 'cloudscraper', which can pass the standard Cloudflare
+    challenge some papers (The Sun, The Nation, Guardian) sit behind."""
     last_error = None
     for attempt in range(tries):
         try:
             r = requests.get(url, headers=HEADERS_WEB, timeout=timeout)
             r.raise_for_status()
             return r
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 403:
+                try:
+                    r2 = get_scraper().get(url, timeout=timeout)
+                    r2.raise_for_status()
+                    return r2
+                except Exception as exc2:  # noqa: BLE001 — record and retry
+                    last_error = exc2
+            else:
+                last_error = exc
         except requests.RequestException as exc:
             last_error = exc
-            if attempt < tries - 1:
-                time.sleep(6)
+        if attempt < tries - 1:
+            time.sleep(6)
     raise last_error
+
+
+_scraper = None
+
+def get_scraper():
+    """Create the challenge-solving downloader once, on first need."""
+    global _scraper
+    if _scraper is None:
+        import cloudscraper
+        _scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+    return _scraper
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -252,6 +276,10 @@ def collect_source(source):
         try:
             resp = fetch(feed_url)
             feed = feedparser.parse(resp.content)
+            if not feed.entries:
+                # A feed that answers but lists nothing is suspicious —
+                # often a protection page in disguise. Make it visible.
+                feed_note += f"feed empty: {feed_url}; "
             for e in feed.entries:
                 link = clean_url(getattr(e, "link", "") or "")
                 if link:
