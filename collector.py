@@ -237,6 +237,14 @@ def db_get_existing(urls):
 
 def db_insert_article(record):
     """Save one article. If it slipped in twice, the database quietly ignores it."""
+    # PostgreSQL rejects text containing null bytes (\u0000) and some control
+    # characters. A few papers (Vanguard especially) occasionally embed these
+    # in their article HTML, which silently blocks the save. Strip them first.
+    for key in ("headline", "byline", "section", "body_text"):
+        val = record.get(key)
+        if isinstance(val, str):
+            record[key] = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", val)
+
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/articles?on_conflict=url",
         headers={**HEADERS_DB, "Prefer": "resolution=ignore-duplicates"},
@@ -304,6 +312,7 @@ def collect_source(source):
 
     # 3) Fetch and extract each new article, politely
     inserted, errors = 0, 0
+    fail_reasons = []
     for url in new_urls:
         info = entries[url]
         try:
@@ -335,14 +344,36 @@ def collect_source(source):
             db_insert_article(record)
             inserted += 1
             print(f"  + saved: {record['headline'][:70] if record['headline'] else url}")
+        except requests.HTTPError as exc:
+            # A database rejection (e.g. a field too long / bad value). Capture WHY —
+            # the server's message is in the response body — so silent loss becomes visible.
+            errors += 1
+            reason = ""
+            try:
+                reason = exc.response.text[:200] if exc.response is not None else str(exc)
+            except Exception:  # noqa: BLE001
+                reason = str(exc)
+            fail_reasons.append(reason)
+            print(f"  ! DB rejected: {url}\n      reason: {reason}")
         except requests.RequestException as exc:
             errors += 1
-            print(f"  ! failed: {url} ({exc})")
+            fail_reasons.append(f"network: {exc}")
+            print(f"  ! fetch failed: {url} ({exc})")
 
         time.sleep(FETCH_DELAY)  # politeness pause between page visits
 
-    # 4) Write the coverage record
-    db_log_run(source["id"], discovered, len(new_urls), inserted, errors, feed_note)
+    # 4) Write the coverage record — include a sample failure reason if any
+    note = feed_note
+    if fail_reasons:
+        # de-duplicate and attach up to two distinct reasons, so the log
+        # tells you WHY articles were lost, not just how many
+        seen = []
+        for r in fail_reasons:
+            if r not in seen:
+                seen.append(r)
+        note += "insert errors: " + " | ".join(seen[:2]) + "; "
+
+    db_log_run(source["id"], discovered, len(new_urls), inserted, errors, note)
     print(f"  done: {inserted} saved, {errors} errors")
     return inserted, errors
 
