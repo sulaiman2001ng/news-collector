@@ -18,6 +18,7 @@ import os
 import sys
 import time
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 import requests
@@ -57,10 +58,9 @@ SOURCES = [
     {
         "id": "guardian",
         "name": "The Guardian Nigeria",
-        "feed_urls": [
-            "https://guardian.ng/feed/",
-            "https://guardian.ng/feed/?paged=2",
-        ],
+        # This paper blocks its RSS feed but keeps sitemaps open (verified
+        # by probe) — so we discover new articles from the sitemap instead.
+        "sitemap_urls": ["https://guardian.ng/sitemap.xml"],
     },
     {
         "id": "businessday",
@@ -97,10 +97,8 @@ SOURCES = [
     {
         "id": "thenation",
         "name": "The Nation",
-        "feed_urls": [
-            "https://thenationonlineng.net/feed/",
-            "https://thenationonlineng.net/feed/?paged=2",
-        ],
+        # Feed is blocked but sitemaps are open (verified by probe).
+        "sitemap_urls": ["https://thenationonlineng.net/sitemap.xml"],
     },
     {
         "id": "tribune",
@@ -217,6 +215,106 @@ def parse_date(value):
         return None
 
 
+def extract_page_published(html):
+    """Read the article page's own machine-readable PUBLICATION stamp —
+    JSON-LD 'datePublished' or the 'article:published_time' meta tag.
+    This is deliberately the publication date, never 'dateModified',
+    which matters because sitemap lastmod is only a modification date."""
+    patterns = [
+        r'"datePublished"\s*:\s*"([^"]+)"',
+        r'property=["\']article:published_time["\'][^>]*content=["\']([^"\']+)',
+        r'content=["\']([^"\']+)["\'][^>]*property=["\']article:published_time',
+    ]
+    for p in patterns:
+        m = re.search(p, html)
+        if m:
+            return parse_date(m.group(1).strip())
+    return None
+
+
+# How many recent sitemap articles to consider per paper per run.
+# Keeps the very first run from trying to download a paper's whole history.
+SITEMAP_MAX_ARTICLES = 60
+
+
+def _xml_tag(el):
+    """Element tag without its namespace prefix."""
+    return el.tag.rsplit("}", 1)[-1]
+
+
+def parse_sitemap(content):
+    """Read a sitemap file. Returns ('sitemapindex' or 'urlset',
+    list of (url, lastmod) pairs)."""
+    root = ET.fromstring(content)
+    items = []
+    for child in root:
+        loc, lastmod = None, None
+        for field in child:
+            t = _xml_tag(field)
+            if t == "loc":
+                loc = (field.text or "").strip()
+            elif t == "lastmod":
+                lastmod = (field.text or "").strip()
+        if loc:
+            items.append((loc, lastmod))
+    return _xml_tag(root), items
+
+
+def sitemap_discover(sitemap_urls):
+    """Discover recent article URLs from sitemaps (for papers that block
+    their RSS feed but keep sitemaps open, as newspapers must for Google).
+
+    Handles both shapes: a sitemap *index* (a list of sub-sitemaps — we
+    follow the most recently updated ones) and a direct *urlset* (a list
+    of article URLs). Returns (entries dict, note string)."""
+    found = []   # (url, lastmod)
+    note = ""
+
+    for sm_url in sitemap_urls:
+        try:
+            resp = fetch(sm_url)
+            kind, items = parse_sitemap(resp.content)
+
+            if kind == "sitemapindex":
+                # Follow the 2 most recently modified sub-sitemaps
+                items.sort(key=lambda x: x[1] or "", reverse=True)
+                for child_url, _ in items[:2]:
+                    try:
+                        child = fetch(child_url)
+                        _, urls = parse_sitemap(child.content)
+                        found.extend(urls)
+                    except (requests.RequestException, ET.ParseError) as exc:
+                        note += f"sub-sitemap failed: {child_url} ({exc}); "
+                    time.sleep(2)
+            else:
+                found.extend(items)
+
+        except (requests.RequestException, ET.ParseError) as exc:
+            note += f"sitemap failed: {sm_url} ({exc}); "
+
+    # Keep only the most recent articles
+    if any(lm for _, lm in found):
+        found.sort(key=lambda x: x[1] or "", reverse=True)
+        recent = found[:SITEMAP_MAX_ARTICLES]
+    else:
+        # No dates in this sitemap — newest entries are usually at the end
+        recent = found[-SITEMAP_MAX_ARTICLES:]
+
+    entries = {}
+    for loc, lastmod in recent:
+        url = clean_url(loc)
+        if not url or url.endswith((".xml", ".jpg", ".png", ".webp")):
+            continue
+        entries[url] = {
+            "title": None,                    # extracted from the page itself
+            "published": parse_date(lastmod), # LAST RESORT only — this is a
+            "author": None,                   # modification date, not publication
+            "section": None,
+            "date_origin": "sitemap_lastmod",
+        }
+    return entries, note
+
+
 def db_get_existing(urls):
     """Ask the database which of these URLs it already has."""
     existing = set()
@@ -277,10 +375,10 @@ def db_log_run(source_id, discovered, new, inserted, errors, note=""):
 def collect_source(source):
     print(f"\n=== {source['name']} ===")
 
-    # 1) Discover article links from the feeds
+    # 1) Discover article links — from RSS feeds, sitemaps, or both
     entries = {}  # url -> feed info
     feed_note = ""
-    for feed_url in source["feed_urls"]:
+    for feed_url in source.get("feed_urls", []):
         try:
             resp = fetch(feed_url)
             feed = feedparser.parse(resp.content)
@@ -296,10 +394,18 @@ def collect_source(source):
                         "published": parse_date(getattr(e, "published", None)),
                         "author": getattr(e, "author", None),
                         "section": (e.tags[0].term if getattr(e, "tags", None) else None),
+                        "date_origin": "feed",
                     }
         except requests.RequestException as exc:
             feed_note += f"feed failed: {feed_url} ({exc}); "
             print(f"  ! could not read feed {feed_url}: {exc}")
+
+    # Sitemap discovery, for papers whose feeds are blocked
+    if source.get("sitemap_urls"):
+        sm_entries, sm_note = sitemap_discover(source["sitemap_urls"])
+        feed_note += sm_note
+        for url, info in sm_entries.items():
+            entries.setdefault(url, info)   # feeds win if both found the URL
 
     discovered = len(entries)
     print(f"  feed(s) list {discovered} articles")
@@ -319,11 +425,31 @@ def collect_source(source):
             page = fetch(url)
 
             extracted = trafilatura.bare_extraction(
-                page.text, url=url, with_metadata=True, favor_precision=True
+                page.text, url=url, with_metadata=True, favor_precision=True,
+                date_extraction_params={"original_date": True},
             )
 
             body = (extracted.text if extracted else "") or ""
-            meta_date = parse_date(getattr(extracted, "date", None)) if extracted else None
+
+            # ── Publication date, best source first ──────────────────
+            # 1. The page's own machine-readable datePublished stamp
+            #    (full timestamp, explicitly publication not modification)
+            # 2. Trafilatura's date reading (original_date=True → prefers
+            #    first publication; day precision)
+            # 3. The RSS feed's timestamp (real publication time)
+            # 4. The sitemap's lastmod (modification date — LAST resort,
+            #    and flagged so researchers can audit or exclude it)
+            page_date = extract_page_published(page.text)
+            tra_date = parse_date(getattr(extracted, "date", None)) if extracted else None
+
+            if page_date:
+                published, date_source = page_date, "page_stamp"
+            elif tra_date:
+                published, date_source = tra_date, "page_extracted"
+            elif info["published"]:
+                published, date_source = info["published"], info.get("date_origin", "feed")
+            else:
+                published, date_source = None, "none"
 
             record = {
                 "source_id": source["id"],
@@ -332,9 +458,9 @@ def collect_source(source):
                             or info["title"],
                 "byline": (getattr(extracted, "author", None) if extracted else None)
                           or info["author"],
-                # Prefer the date printed on the article page; fall back to the feed's.
-                "published_at": meta_date or info["published"],
-                "date_inferred": not bool(meta_date or info["published"]),
+                "published_at": published,
+                "date_inferred": date_source in ("sitemap_lastmod", "none"),
+                "date_source": date_source,
                 "section": info["section"],
                 "body_text": body,
                 "word_count": len(body.split()),
