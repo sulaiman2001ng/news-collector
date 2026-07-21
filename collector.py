@@ -245,6 +245,18 @@ def _xml_tag(el):
 def parse_sitemap(content):
     """Read a sitemap file. Returns ('sitemapindex' or 'urlset',
     list of (url, lastmod) pairs)."""
+    # Some papers (Guardian.ng) serve the sitemap with a UTF-8 byte-order-mark
+    # or blank lines before the XML declaration — invisible in a browser, but
+    # a strict XML parser refuses to start. Strip anything before "<".
+    if isinstance(content, bytes):
+        idx = content.find(b"<")
+        if idx > 0:
+            content = content[idx:]
+    else:
+        idx = content.find("<")
+        if idx > 0:
+            content = content[idx:]
+
     root = ET.fromstring(content)
     items = []
     for child in root:
