@@ -1,0 +1,25 @@
+# One-off Vanguard recovery — manual trigger only.
+# File location:  .github/workflows/backfill.yml
+# Delete this file and backfill_vanguard.py after a successful run.
+
+name: Backfill Vanguard (one-off)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120    # up to ~900 articles at polite pace
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run the recovery
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CONTACT_EMAIL: ${{ secrets.CONTACT_EMAIL }}
+        run: python backfill_vanguard.py
