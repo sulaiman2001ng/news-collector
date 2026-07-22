@@ -19,7 +19,17 @@ import sys
 import time
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# Nigerian papers publish in West Africa Time (UTC+1, no DST).
+# Anything without an explicit timezone should be labelled WAT,
+# not UTC — otherwise late-evening WAT articles get bumped to
+# the next day when converted for storage.
+try:
+    from zoneinfo import ZoneInfo
+    WAT = ZoneInfo("Africa/Lagos")
+except ImportError:  # older Python fallback
+    WAT = timezone(timedelta(hours=1))
 
 import requests
 import feedparser
@@ -208,8 +218,8 @@ def parse_date(value):
     try:
         dt = dateparser.parse(value)
         if dt and dt.tzinfo is None:
-            # Nigerian papers publish in WAT (UTC+1)
-            dt = dt.replace(tzinfo=timezone.utc)
+            # A stamp without an explicit zone means Nigerian local time.
+            dt = dt.replace(tzinfo=WAT)
         return dt.isoformat()
     except (ValueError, OverflowError, TypeError):
         return None
