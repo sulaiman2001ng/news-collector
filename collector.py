@@ -161,15 +161,38 @@ HEADERS_WEB = {
 
 def fetch(url, tries=2, timeout=60):
     """Download a URL with patience: a longer timeout, one retry after a
-    short pause, and — if the site answers 403 Forbidden — an automatic
-    switch to 'cloudscraper', which can pass the standard Cloudflare
-    challenge some papers (The Sun, The Nation, Guardian) sit behind."""
+    short pause, and — if the site answers 403 Forbidden OR returns a
+    Cloudflare challenge page disguised as a 200 — an automatic switch
+    to 'cloudscraper', which can pass the standard Cloudflare challenge."""
+
+    def looks_like_challenge(r):
+        # Cloudflare's "Just a moment..." puzzle is served with 200 OK
+        # and a small HTML body containing tell-tale strings.
+        if len(r.content) > 20000:
+            return False
+        peek = r.text[:2000].lower()
+        return ("just a moment" in peek
+                or "cf-challenge" in peek
+                or "challenge-platform" in peek
+                or "enable javascript and cookies" in peek)
+
     last_error = None
     for attempt in range(tries):
         try:
             r = requests.get(url, headers=HEADERS_WEB, timeout=timeout)
             r.raise_for_status()
-            return r
+            # Challenge page disguised as success — treat as if it were 403
+            if looks_like_challenge(r):
+                try:
+                    r2 = get_scraper().get(url, timeout=timeout)
+                    r2.raise_for_status()
+                    if not looks_like_challenge(r2):
+                        return r2
+                    last_error = Exception("cloudflare challenge unresolved")
+                except Exception as exc2:  # noqa: BLE001
+                    last_error = exc2
+            else:
+                return r
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 403:
                 try:
@@ -243,8 +266,9 @@ def extract_page_published(html):
 
 
 # How many recent sitemap articles to consider per paper per run.
-# Keeps the very first run from trying to download a paper's whole history.
-SITEMAP_MAX_ARTICLES = 60
+# Was 60 originally — raised to 200 after The Nation (which publishes
+# 80-120 articles a day) proved 60 too tight for a 2-hourly schedule.
+SITEMAP_MAX_ARTICLES = 200
 
 
 def _xml_tag(el):
