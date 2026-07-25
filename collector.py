@@ -109,6 +109,10 @@ SOURCES = [
         "name": "The Nation",
         # Feed is blocked but sitemaps are open (verified by probe).
         "sitemap_urls": ["https://thenationonlineng.net/sitemap.xml"],
+        # Cloudflare escalated against our IP with the standard cap.
+        # Politer mode: shorter list per run, extra delay between fetches,
+        # cooler-off pause between runs.
+        "polite_mode": True,
     },
     {
         "id": "tribune",
@@ -306,14 +310,19 @@ def parse_sitemap(content):
     return _xml_tag(root), items
 
 
-def sitemap_discover(sitemap_urls):
+def sitemap_discover(sitemap_urls, max_articles=None):
     """Discover recent article URLs from sitemaps (for papers that block
     their RSS feed but keep sitemaps open, as newspapers must for Google).
+
+    max_articles caps how many URLs come out — set lower for papers under
+    strict protection so we don't look like a burst of automated requests.
 
     Handles both shapes: a sitemap *index* (a list of sub-sitemaps — we
     follow the ones most likely to hold fresh content) and a direct
     *urlset* (a list of article URLs). Returns (entries dict, note string).
     """
+    if max_articles is None:
+        max_articles = SITEMAP_MAX_ARTICLES
     found = []   # (url, lastmod)
     note = ""
 
@@ -362,10 +371,10 @@ def sitemap_discover(sitemap_urls):
     # Keep only the most recent articles
     if any(lm for _, lm in found):
         found.sort(key=lambda x: x[1] or "", reverse=True)
-        recent = found[:SITEMAP_MAX_ARTICLES]
+        recent = found[:max_articles]
     else:
         # No dates in this sitemap — newest entries are usually at the end
-        recent = found[-SITEMAP_MAX_ARTICLES:]
+        recent = found[-max_articles:]
 
     entries = {}
     for loc, lastmod in recent:
@@ -442,6 +451,13 @@ def db_log_run(source_id, discovered, new, inserted, errors, note=""):
 def collect_source(source):
     print(f"\n=== {source['name']} ===")
 
+    # Per-source politeness: papers under strict protection (e.g. The Nation)
+    # get a shorter working list and longer pauses, so we look less like a
+    # burst of automated requests. Others keep the standard, faster cadence.
+    polite = source.get("polite_mode", False)
+    max_articles = 30 if polite else SITEMAP_MAX_ARTICLES
+    fetch_delay = 12 if polite else FETCH_DELAY
+
     # 1) Discover article links — from RSS feeds, sitemaps, or both
     entries = {}  # url -> feed info
     feed_note = ""
@@ -469,7 +485,7 @@ def collect_source(source):
 
     # Sitemap discovery, for papers whose feeds are blocked
     if source.get("sitemap_urls"):
-        sm_entries, sm_note = sitemap_discover(source["sitemap_urls"])
+        sm_entries, sm_note = sitemap_discover(source["sitemap_urls"], max_articles)
         feed_note += sm_note
         for url, info in sm_entries.items():
             entries.setdefault(url, info)   # feeds win if both found the URL
@@ -553,7 +569,7 @@ def collect_source(source):
             fail_reasons.append(f"network: {exc}")
             print(f"  ! fetch failed: {url} ({exc})")
 
-        time.sleep(FETCH_DELAY)  # politeness pause between page visits
+        time.sleep(fetch_delay)  # politeness pause between page visits
 
     # 4) Write the coverage record — include a sample failure reason if any
     note = feed_note
