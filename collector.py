@@ -287,8 +287,9 @@ def sitemap_discover(sitemap_urls):
     their RSS feed but keep sitemaps open, as newspapers must for Google).
 
     Handles both shapes: a sitemap *index* (a list of sub-sitemaps — we
-    follow the most recently updated ones) and a direct *urlset* (a list
-    of article URLs). Returns (entries dict, note string)."""
+    follow the ones most likely to hold fresh content) and a direct
+    *urlset* (a list of article URLs). Returns (entries dict, note string).
+    """
     found = []   # (url, lastmod)
     note = ""
 
@@ -298,9 +299,29 @@ def sitemap_discover(sitemap_urls):
             kind, items = parse_sitemap(resp.content)
 
             if kind == "sitemapindex":
-                # Follow the 2 most recently modified sub-sitemaps
-                items.sort(key=lambda x: x[1] or "", reverse=True)
-                for child_url, _ in items[:2]:
+                # Pick which sub-sitemaps to follow. Two cases in the wild:
+                #   (a) sub-sitemaps have lastmod dates → follow the newest.
+                #   (b) sub-sitemaps have NO lastmod dates (The Nation) →
+                #       WordPress numbers them chronologically oldest-first,
+                #       so freshest articles live in the highest numbers.
+                has_dates = any(lm for _, lm in items)
+                if has_dates:
+                    items.sort(key=lambda x: x[1] or "", reverse=True)
+                    subs_to_follow = items[:2]
+                else:
+                    def sitemap_number(url):
+                        # Extract the trailing number from names like
+                        # wp-sitemap-posts-post-33.xml → 33
+                        import re as _re
+                        m = _re.search(r"(\d+)\.xml$", url)
+                        return int(m.group(1)) if m else -1
+                    posty = [(u, lm) for u, lm in items if "post" in u.lower()]
+                    pool = posty if posty else items
+                    pool.sort(key=lambda x: sitemap_number(x[0]), reverse=True)
+                    # Follow more when we can't be selective by date
+                    subs_to_follow = pool[:3]
+
+                for child_url, _ in subs_to_follow:
                     try:
                         child = fetch(child_url)
                         _, urls = parse_sitemap(child.content)
