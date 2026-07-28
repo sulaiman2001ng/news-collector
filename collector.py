@@ -104,16 +104,16 @@ SOURCES = [
             "https://www.thisdaylive.com/index.php/feed/",  # alternate address some ThisDay setups use
         ],
     },
-    {
-        "id": "thenation",
-        "name": "The Nation",
-        # Feed is blocked but sitemaps are open (verified by probe).
-        "sitemap_urls": ["https://thenationonlineng.net/sitemap.xml"],
-        # Cloudflare escalated against our IP with the standard cap.
-        # Politer mode: shorter list per run, extra delay between fetches,
-        # cooler-off pause between runs.
-        "polite_mode": True,
-    },
+    # {
+    #     "id": "thenation",
+    #     "name": "The Nation",
+    #     # Feed is blocked but sitemaps are open (verified by probe).
+    #     "sitemap_urls": ["https://thenationonlineng.net/sitemap.xml"],
+    #     # Cloudflare escalated against our IP with the standard cap.
+    #     # Politer mode: shorter list per run, extra delay between fetches,
+    #     # cooler-off pause between runs.
+    #     "polite_mode": True,
+    # },
     {
         "id": "tribune",
         "name": "Nigerian Tribune",
